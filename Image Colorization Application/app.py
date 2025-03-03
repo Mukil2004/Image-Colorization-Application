@@ -35,30 +35,37 @@ net.getLayer(class8).blobs = [pts.astype("float32")]
 net.getLayer(conv8).blobs = [np.full([1, 313], 2.606, dtype="float32")]
 
 def preprocess_image(img_array):
-    # Adjust gamma for overexposed/underexposed images
-    gamma = 1.2  # Slight boost
+    """Adjust gamma for better brightness/contrast."""
+    gamma = 1.2
     look_up_table = np.array([((i / 255.0) ** gamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
     adjusted = cv2.LUT(img_array, look_up_table)
     return adjusted
 
 def colorize_grayscale(img_array):
-    # Preprocess image for model
+    """Colorize a grayscale image."""
     normalized = img_array.astype("float32") / 255.0
     lab = cv2.cvtColor(normalized, cv2.COLOR_RGB2LAB)
     L = cv2.split(lab)[0]
-    L -= 50  # Centering
+    L -= 50
 
-    # Predict color using the model
     net.setInput(cv2.dnn.blobFromImage(L))
     ab = net.forward()[0, :, :, :].transpose((1, 2, 0))
     ab = cv2.resize(ab, (img_array.shape[1], img_array.shape[0]))
     L = cv2.split(lab)[0]
 
-    # Combine with original L channel
     colorized = np.concatenate((L[:, :, np.newaxis], ab), axis=2)
     colorized = cv2.cvtColor(colorized, cv2.COLOR_LAB2RGB)
     colorized = (255 * colorized).astype("uint8")
     return colorized
+
+def detect_image_type(img_array):
+    """Detect if the image is grayscale or negative."""
+    if len(img_array.shape) == 2 or np.array_equal(img_array[:, :, 0], img_array[:, :, 1]):
+        return "grayscale"
+    elif np.all(img_array <= 255) and np.mean(img_array) < 128:  # Check for high-intensity inversion
+        return "negative"
+    else:
+        return "color"
 
 if uploaded_file:
     # Load and display the input
@@ -70,19 +77,22 @@ if uploaded_file:
     img_array = np.array(input_image)
 
     # Detect grayscale or negative
-    if len(img_array.shape) == 2 or np.array_equal(img_array[:, :, 0], img_array[:, :, 1]):
+    image_type = detect_image_type(img_array)
+    if image_type == "grayscale":
         st.subheader("Detected Grayscale Image")
         img_array = preprocess_image(img_array)
         colorized = colorize_grayscale(img_array)
-    else:
+    elif image_type == "negative":
         st.subheader("Detected Negative Image")
-        img_array = preprocess_image(img_array)
         positive = 255 - img_array
-        colorized = colorize_grayscale(positive)
+        colorized = colorize_grayscale(preprocess_image(positive))
+    else:
+        st.error("Uploaded image is not grayscale or negative. Please upload a valid image.")
+        st.stop()
 
     # Enhance the output image
     colorized = cv2.cvtColor(colorized, cv2.COLOR_RGB2HSV)
-    colorized[:, :, 1] = cv2.add(colorized[:, :, 1], 15)  # Slight saturation boost
+    colorized[:, :, 1] = cv2.add(colorized[:, :, 1], 15)
     colorized = cv2.cvtColor(colorized, cv2.COLOR_HSV2RGB)
 
     # Display the result
